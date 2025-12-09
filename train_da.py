@@ -66,6 +66,32 @@ class MinEntLoss(nn.Module):
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
         return entropy.mean()
 
+def load_sam_encoder_weights(model, checkpoint_path):
+    """
+    从 SAM-Med3D 完整权重中加载 image_encoder 部分
+    """
+    if not os.path.exists(checkpoint_path):
+        print(f"Checkpoint not found: {checkpoint_path}")
+        return
+        
+    print(f"Loading SAM encoder weights from {checkpoint_path}...")
+    state_dict = torch.load(checkpoint_path, map_location='cpu')
+    
+    encoder_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith('image_encoder.'):
+            new_key = k[len('image_encoder.'):]
+            encoder_state_dict[new_key] = v
+    
+    if len(encoder_state_dict) == 0:
+        print("No image_encoder weights found in checkpoint! Trying to load as pure encoder...")
+        # 尝试直接加载（假设checkpoint就是encoder）
+        msg = model.sam_encoder.load_state_dict(state_dict, strict=False)
+    else:
+        msg = model.sam_encoder.load_state_dict(encoder_state_dict, strict=True)
+        
+    print(f"Loaded SAM encoder weights: {msg}")
+
 # -----------------------------------------------------------------------------
 # 2. 训练流程
 # -----------------------------------------------------------------------------
@@ -214,8 +240,20 @@ def train_domain_adaptation(
 
 if __name__ == "__main__":
     # 配置参数
+    # 注意：SAM-Med3D 预训练模型通常是在 128x128x128 的输入上训练的
+    # 如果你的 crop_size 是 (32, 32, 32)，你需要调整 img_size 参数或者对 pos_embed 进行插值
+    # 这里我们将 img_size 设置为 32 以匹配 crop_size，但这会导致 pos_embed 形状不匹配
+    # 更好的做法是保持 img_size=128，并在 dataset 中 resize 到 128，或者在模型中处理 pos_embed 插值
+    
+    # 方案 A: 调整 crop_size 为 128 (显存可能不够)
+    # 方案 B: 调整 img_size 为 32，并允许加载权重时 pos_embed 不匹配 (需要手动插值)
+    
+    # 这里我们采用方案 B 的变体：在加载权重后，对 pos_embed 进行插值以适应当前的 img_size (32)
+    
+    current_img_size = 32  # 匹配 dataset 的 crop_size
+    
     sam_vit_cfg = dict(
-        img_size=128,
+        img_size=current_img_size,
         patch_size=16,
         in_chans=1,
         embed_dim=768,
@@ -231,21 +269,55 @@ if __name__ == "__main__":
     # 初始化模型
     model = SAMMedUNet3D(sam_vit_cfg, unet3d_cfg, projector_out_channels=1024)
     
+    # 加载预训练权重 (如果有)
+    sam_checkpoint = "/home/hasselnot/ML/SAM-Med3D/sam_checkpoint/sam_med3d_turbo.pth"
+    
+    # 自定义加载逻辑，处理 pos_embed 尺寸不匹配问题
+    if os.path.exists(sam_checkpoint):
+        print(f"Loading SAM encoder weights from {sam_checkpoint}...")
+        state_dict = torch.load(sam_checkpoint, map_location='cpu')
+        
+        encoder_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith('image_encoder.'):
+                new_key = k[len('image_encoder.'):]
+                encoder_state_dict[new_key] = v
+        
+        # 处理 pos_embed 插值
+        if 'pos_embed' in encoder_state_dict:
+            pos_embed = encoder_state_dict['pos_embed'] # (1, D, H, W, C) or similar
+            # 假设 pos_embed 是 (1, 8, 8, 8, 768) 对应 128输入/16patch
+            # 我们现在需要 (1, 2, 2, 2, 768) 对应 32输入/16patch
+            
+            target_shape = model.sam_encoder.pos_embed.shape
+            if pos_embed.shape != target_shape:
+                print(f"Resizing pos_embed from {pos_embed.shape} to {target_shape}")
+                # Permute to (1, C, D, H, W) for interpolate
+                pos_embed = pos_embed.permute(0, 4, 1, 2, 3)
+                pos_embed = F.interpolate(pos_embed, size=target_shape[1:4], mode='trilinear', align_corners=False)
+                # Permute back
+                pos_embed = pos_embed.permute(0, 2, 3, 4, 1)
+                encoder_state_dict['pos_embed'] = pos_embed
+        
+        msg = model.sam_encoder.load_state_dict(encoder_state_dict, strict=False)
+        print(f"Loaded SAM encoder weights: {msg}")
+    
     # -------------------------------------------------------------------------
     # 真实数据加载示例 (取消注释并填入路径)
     # -------------------------------------------------------------------------
     if HDF5Dataset is not None:
-        source_h5 = "path/to/source_data.h5"
-        target_h5 = "path/to/target_data.h5"
+        source_h5 = "/home/hasselnot/ML/SAM-Med3D/datasets/sample_A_padded_20160501.hdf"
+        target_h5 = "/home/hasselnot/ML/SAM-Med3D/datasets/sample_A+_padded_20160601.hdf"
         
         # 定义数据集
-        source_ds = HDF5Dataset(source_h5, crop_size=(16, 128, 128), mode='train')
-        target_ds = HDF5Dataset(target_h5, crop_size=(16, 128, 128), mode='train')
+        # 确保 crop_size 与 sam_vit_cfg['img_size'] 一致
+        source_ds = HDF5Dataset(source_h5, crop_size=(current_img_size, current_img_size, current_img_size), mode='train')
+        target_ds = HDF5Dataset(target_h5, crop_size=(current_img_size, current_img_size, current_img_size), mode='train')
         
         # 定义DataLoader
-        source_loader = DataLoader(source_ds, batch_size=2, shuffle=True, num_workers=4)
-        target_loader = DataLoader(target_ds, batch_size=2, shuffle=True, num_workers=4)
-        val_loader = DataLoader(source_ds, batch_size=2, shuffle=False, num_workers=4) # 验证集
+        source_loader = DataLoader(source_ds, batch_size=2, shuffle=True, num_workers=2)
+        target_loader = DataLoader(target_ds, batch_size=2, shuffle=True, num_workers=2)
+        val_loader = DataLoader(source_ds, batch_size=2, shuffle=False, num_workers=2) # 验证集
         
         print("Starting training with real data...")
         train_domain_adaptation(
@@ -258,30 +330,6 @@ if __name__ == "__main__":
             lr=1e-4,
             save_dir='checkpoints'
         )
-        exit() # 结束程序，不运行下面的模拟测试
+        exit()
 
-    # 模拟数据加载器
-    print("Creating mock dataloaders...")
-    # 模拟数据: (B, C, D, H, W) = (2, 1, 16, 128, 128)
-    # 注意：D维度必须 >= patch_size (16)
-    mock_data_s = [(torch.randn(2, 1, 16, 128, 128), torch.randint(0, 2, (2, 1, 16, 128, 128)).float()) for _ in range(5)]
-    mock_data_t = [(torch.randn(2, 1, 16, 128, 128), torch.randint(0, 2, (2, 1, 16, 128, 128)).float()) for _ in range(5)]
-    
-    source_loader = DataLoader(mock_data_s, batch_size=None)
-    target_loader = DataLoader(mock_data_t, batch_size=None)
-    val_loader = DataLoader(mock_data_s, batch_size=None) # 复用源域数据作为验证集
-    
-    print("Starting test training...")
-    # 运行训练函数，设置极少的epoch以快速验证流程
-    # 3个epoch，每个阶段跑1个epoch (3*0.3=0.9 -> 1, 3*0.3=0.9 -> 1, rest -> 1)
-    train_domain_adaptation(
-        model=model,
-        source_loader=source_loader,
-        target_loader=target_loader,
-        val_loader=val_loader,
-        device='cuda' if torch.cuda.is_available() else 'cpu',
-        num_epochs=3,
-        lr=1e-4,
-        save_dir='test_checkpoints'
-    )
-    print("Test training completed successfully!")
+

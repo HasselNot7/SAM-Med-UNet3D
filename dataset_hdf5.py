@@ -10,7 +10,7 @@ class HDF5Dataset(Dataset):
     - volumes/raw: 原始灰度图像 (D, H, W)
     - volumes/labels/clefts: 突触间隙标签 (D, H, W)
     """
-    def __init__(self, h5_path, crop_size=(16, 128, 128), mode='train', transform=None):
+    def __init__(self, h5_path, crop_size=(32, 32, 32), mode='train', transform=None):
         """
         Args:
             h5_path (str): HDF5 文件路径
@@ -48,16 +48,36 @@ class HDF5Dataset(Dataset):
             cd, ch, cw = self.crop_size
             
             # 随机选择起始点
-            z = np.random.randint(0, d - cd)
-            y = np.random.randint(0, h - ch)
-            x = np.random.randint(0, w - cw)
+            z = int(np.random.randint(0, d - cd))
+            y = int(np.random.randint(0, h - ch))
+            x = int(np.random.randint(0, w - cw))
             
+            # Debug print
+            # print(f"idx={index}, shape={self.raw_shape}, crop={self.crop_size}, z={z}, y={y}, x={x}")
+
             # 2. 读取数据 patch
             # HDF5 支持切片读取，只读取需要的 patch，不用加载整个卷
-            raw_patch = f['volumes/raw'][z:z+cd, y:y+ch, x:x+cw]
+            try:
+                raw_patch = f['volumes/raw'][z:z+cd, y:y+ch, x:x+cw]
+            except Exception as e:
+                print(f"Error slicing raw: {e}, z={z}, y={y}, x={x}, shape={self.raw_shape}")
+                raise e
+            
+            # 检查形状，如果不匹配（可能在边界），则进行填充
+            if raw_patch.shape != (cd, ch, cw):
+                 # print(f"Warning: Invalid shape {raw_patch.shape}, expected {(cd, ch, cw)}. Padding...")
+                 pad_d = cd - raw_patch.shape[0]
+                 pad_h = ch - raw_patch.shape[1]
+                 pad_w = cw - raw_patch.shape[2]
+                 raw_patch = np.pad(raw_patch, ((0, pad_d), (0, pad_h), (0, pad_w)), mode='constant')
             
             if self.has_label:
                 label_patch = f['volumes/labels/clefts'][z:z+cd, y:y+ch, x:x+cw]
+                if label_patch.shape != (cd, ch, cw):
+                     pad_d = cd - label_patch.shape[0]
+                     pad_h = ch - label_patch.shape[1]
+                     pad_w = cw - label_patch.shape[2]
+                     label_patch = np.pad(label_patch, ((0, pad_d), (0, pad_h), (0, pad_w)), mode='constant')
             else:
                 # 如果没有标签（如目标域数据），生成全0占位
                 label_patch = np.zeros(self.crop_size, dtype=np.uint8)
@@ -94,7 +114,7 @@ class PairedHDF5Dataset(Dataset):
     同时从源域和目标域采样，用于 Phase 2 训练
     假设源域和目标域是未配对的 (Unpaired)，随机采样
     """
-    def __init__(self, source_h5, target_h5, crop_size=(16, 128, 128)):
+    def __init__(self, source_h5, target_h5, crop_size=(32, 32, 32)):
         self.source_ds = HDF5Dataset(source_h5, crop_size=crop_size)
         self.target_ds = HDF5Dataset(target_h5, crop_size=crop_size)
         
