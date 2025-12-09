@@ -10,8 +10,12 @@ from monai.losses import DiceCELoss
 
 # 导入自定义模块
 from sam_med_unet3d.sam_med_unet3d import SAMMedUNet3D
-# from unet3d.dataset import MRIDataset  # 假设这是你的数据集类
 from unet3d.unet3d import UNet3D
+try:
+    from dataset_hdf5 import HDF5Dataset
+except ImportError:
+    print("Warning: dataset_hdf5 module not found or h5py not installed.")
+    HDF5Dataset = None
 
 # -----------------------------------------------------------------------------
 # 1. 损失函数定义
@@ -227,6 +231,35 @@ if __name__ == "__main__":
     # 初始化模型
     model = SAMMedUNet3D(sam_vit_cfg, unet3d_cfg, projector_out_channels=1024)
     
+    # -------------------------------------------------------------------------
+    # 真实数据加载示例 (取消注释并填入路径)
+    # -------------------------------------------------------------------------
+    if HDF5Dataset is not None:
+        source_h5 = "path/to/source_data.h5"
+        target_h5 = "path/to/target_data.h5"
+        
+        # 定义数据集
+        source_ds = HDF5Dataset(source_h5, crop_size=(16, 128, 128), mode='train')
+        target_ds = HDF5Dataset(target_h5, crop_size=(16, 128, 128), mode='train')
+        
+        # 定义DataLoader
+        source_loader = DataLoader(source_ds, batch_size=2, shuffle=True, num_workers=4)
+        target_loader = DataLoader(target_ds, batch_size=2, shuffle=True, num_workers=4)
+        val_loader = DataLoader(source_ds, batch_size=2, shuffle=False, num_workers=4) # 验证集
+        
+        print("Starting training with real data...")
+        train_domain_adaptation(
+            model=model,
+            source_loader=source_loader,
+            target_loader=target_loader,
+            val_loader=val_loader,
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            num_epochs=100,
+            lr=1e-4,
+            save_dir='checkpoints'
+        )
+        exit() # 结束程序，不运行下面的模拟测试
+
     # 模拟数据加载器
     print("Creating mock dataloaders...")
     # 模拟数据: (B, C, D, H, W) = (2, 1, 16, 128, 128)
