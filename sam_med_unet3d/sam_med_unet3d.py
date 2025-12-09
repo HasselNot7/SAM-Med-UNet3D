@@ -72,17 +72,12 @@ class SAMMedUNet3D(nn.Module):
 
         d4 = torch.cat([self.unet3d.deconv_blk4(mixed), x4], dim=1)
         d_high4 = self.unet3d.dec_conv_blk4(d4)
-        print('d_high4 shape:', d_high4.shape)
         d3 = torch.cat([self.unet3d.deconv_blk3(d_high4), x3], dim=1)
         d_high3 = self.unet3d.dec_conv_blk3(d3)
-        print('d_high3 shape:', d_high3.shape)
         d2 = torch.cat([self.unet3d.deconv_blk2(d_high3), x2], dim=1)
         d_high2 = self.unet3d.dec_conv_blk2(d2)
-        print('d_high2 shape:', d_high2.shape)
         d1 = torch.cat([self.unet3d.deconv_blk1(d_high2), x1], dim=1)
-        print('d1 shape:', d1.shape)
         d_high1 = self.unet3d.dec_conv_blk1(d1)
-        print('d_high1 shape:', d_high1.shape)
         seg = self.unet3d.sigmoid(self.unet3d.one_conv(d_high1))
         return seg
 
