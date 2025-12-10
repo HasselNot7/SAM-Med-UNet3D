@@ -170,9 +170,10 @@ def train():
         print(f"Epoch {epoch+1} finished. Avg Loss: {avg_loss:.4f}, Avg Dice: {avg_dice:.4f}")
         
         # Save checkpoint
-        save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'checkpoints')
-        os.makedirs(save_dir, exist_ok=True)
-        torch.save(model.state_dict(), os.path.join(save_dir, f'unet3d_epfl_epoch_{epoch+1}.pth'))
+        if (epoch + 1) % 10 == 0:
+            save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'checkpoints')
+            os.makedirs(save_dir, exist_ok=True)
+            torch.save(model.state_dict(), os.path.join(save_dir, f'unet3d_epfl_epoch_{epoch+1}.pth'))
 
 if __name__ == '__main__':
     train()
