@@ -68,6 +68,13 @@ def test(args):
     
     model = SAMMedUNet3D(sam_vit_cfg, unet3d_cfg, projector_out_channels=1024).to(device)
     
+    # Manually initialize projector to allow loading weights
+    # Based on training logic: vit_feat = (B, C, D, H, W) -> permute(0, 4, 1, 2, 3) -> (B, W, C, D, H)
+    # So in_channels = W = img_size // patch_size
+    projector_in_channels = sam_vit_cfg['img_size'] // sam_vit_cfg['patch_size']
+    from sam_med_unet3d.sam_med_unet3d import Conv3DProjector
+    model.projector = Conv3DProjector(projector_in_channels, 1024).to(device)
+    
     # Load trained weights
     if os.path.exists(args.checkpoint):
         print(f"Loading weights from {args.checkpoint}")
