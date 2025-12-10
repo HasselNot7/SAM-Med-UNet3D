@@ -66,6 +66,17 @@ def dice_coeff(pred, target):
     
     return (2. * intersection + smooth) / (m1.sum() + m2.sum() + smooth)
 
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-5):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, pred, target):
+        intersection = (pred * target).sum(dim=(2, 3, 4))
+        union = pred.sum(dim=(2, 3, 4)) + target.sum(dim=(2, 3, 4))
+        dice = (2. * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
+
 def train():
     # Configuration
     # Assuming the script is run from sam_med_unet3d/ or root, we need absolute path or correct relative path
@@ -135,7 +146,10 @@ def train():
     
     # Optimizer and Loss
     optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-4)
-    criterion = nn.BCELoss()
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    
+    bce_criterion = nn.BCELoss()
+    dice_criterion = DiceLoss()
     
     print(f"Start training on {device}...")
     
@@ -152,7 +166,10 @@ def train():
             optimizer.zero_grad()
             outputs = model(imgs)
             
-            loss = criterion(outputs, labels)
+            loss_bce = bce_criterion(outputs, labels)
+            loss_dice = dice_criterion(outputs, labels)
+            loss = 0.5 * loss_bce + 0.5 * loss_dice
+            
             loss.backward()
             optimizer.step()
             
@@ -163,11 +180,13 @@ def train():
             dice = dice_coeff(pred_mask, labels)
             epoch_dice += dice.item()
             
-            pbar.set_postfix({'loss': loss.item(), 'dice': dice.item()})
-            
+            pbar.set_postfix({'loss': loss.item(), 'bce': loss_bce.item(), 'dice_loss': loss_dice.item(), 'dice_score': dice.item()})
+        
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
         avg_loss = epoch_loss / len(train_loader)
         avg_dice = epoch_dice / len(train_loader)
-        print(f"Epoch {epoch+1} finished. Avg Loss: {avg_loss:.4f}, Avg Dice: {avg_dice:.4f}")
+        print(f"Epoch {epoch+1} finished. Avg Loss: {avg_loss:.4f}, Avg Dice: {avg_dice:.4f}, LR: {current_lr:.6f}")
         
         # Save checkpoint
         if (epoch + 1) % 10 == 0:
