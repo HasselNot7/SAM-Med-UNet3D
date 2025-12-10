@@ -12,7 +12,7 @@ from tqdm import tqdm
 # Add parent directory to path to import unet3d
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from unet3d.unet3d import UNet3D
+from sam_med_unet3d.sam_med_unet3d import SAMMedUNet3D
 
 class EPFLDataset(Dataset):
     def __init__(self, root_dir, mode='train'):
@@ -88,11 +88,53 @@ def train():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
     
     # Model
-    # num_channels=1 because input is grayscale and output is binary mask (sigmoid)
-    model = UNet3D(num_channels=1, residual='conv').to(device)
+    sam_vit_cfg = dict(
+        img_size=128,
+        patch_size=16,
+        in_chans=1,
+        embed_dim=768,
+        depth=12,
+        num_heads=12,
+        out_chans=256,
+        global_attn_indexes=[2, 5, 8, 11],
+        window_size=0,
+    )
+    unet3d_cfg = dict(
+        num_channels=1,
+        feat_channels=[64, 128, 256, 512, 1024],
+        residual='conv'
+    )
+    
+    model = SAMMedUNet3D(sam_vit_cfg, unet3d_cfg, projector_out_channels=1024).to(device)
+    
+    # Load SAM weights
+    ckpt_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'sam_checkpoint', 'sam_med3d_turbo.pth')
+    if os.path.exists(ckpt_path):
+        print(f"Loading SAM weights from {ckpt_path}")
+        state_dict = torch.load(ckpt_path, map_location='cpu')
+        if 'model' in state_dict:
+            state_dict = state_dict['model']
+            
+        encoder_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith('image_encoder.'):
+                new_k = k[len('image_encoder.'):]
+                encoder_dict[new_k] = v
+        
+        if len(encoder_dict) > 0:
+            msg = model.sam_encoder.load_state_dict(encoder_dict, strict=False)
+            print(f"SAM Encoder loaded: {msg}")
+        else:
+            print("No image_encoder keys found in checkpoint!")
+    else:
+        print(f"Checkpoint not found at {ckpt_path}")
+
+    # Freeze SAM Encoder
+    for param in model.sam_encoder.parameters():
+        param.requires_grad = False
     
     # Optimizer and Loss
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-4)
     criterion = nn.BCELoss()
     
     print(f"Start training on {device}...")
