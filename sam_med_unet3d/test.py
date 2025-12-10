@@ -3,6 +3,7 @@ import sys
 import glob
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import tifffile
 import numpy as np
@@ -56,9 +57,10 @@ def test(args):
         embed_dim=768,
         depth=12,
         num_heads=12,
-        out_chans=256,
+        out_chans=384,
         global_attn_indexes=[2, 5, 8, 11],
         window_size=0,
+        use_rel_pos=True,
     )
     unet3d_cfg = dict(
         num_channels=1,
@@ -79,7 +81,29 @@ def test(args):
     if os.path.exists(args.checkpoint):
         print(f"Loading weights from {args.checkpoint}")
         state_dict = torch.load(args.checkpoint, map_location=device)
-        model.load_state_dict(state_dict)
+        
+        # Handle relative position embedding size mismatch if loading from original SAM checkpoint
+        # But here we are loading our own trained checkpoint, so shapes should match.
+        # However, if we are loading the pretrained SAM weights directly for testing (zero-shot), we might need resizing.
+        # Assuming we load a fine-tuned checkpoint where shapes are already correct.
+        
+        # If loading fails due to size mismatch, try resizing (similar to train.py)
+        try:
+            model.load_state_dict(state_dict)
+        except RuntimeError as e:
+            if 'size mismatch' in str(e) and 'rel_pos' in str(e):
+                print("Size mismatch detected in relative position embeddings. Attempting to resize...")
+                model_state = model.state_dict()
+                for k, v in state_dict.items():
+                    if k in model_state and v.shape != model_state[k].shape and 'rel_pos' in k:
+                        print(f"Resizing {k}: {v.shape} -> {model_state[k].shape}")
+                        v = v.permute(1, 0).unsqueeze(0)
+                        v = F.interpolate(v, size=model_state[k].shape[0], mode='linear', align_corners=False)
+                        v = v.squeeze(0).permute(1, 0)
+                        state_dict[k] = v
+                model.load_state_dict(state_dict)
+            else:
+                raise e
     else:
         print(f"Checkpoint not found at {args.checkpoint}")
         return

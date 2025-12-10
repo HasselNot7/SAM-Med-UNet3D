@@ -3,6 +3,7 @@ import sys
 import glob
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import tifffile
@@ -106,9 +107,10 @@ def train():
         embed_dim=768,
         depth=12,
         num_heads=12,
-        out_chans=256,
+        out_chans=384,
         global_attn_indexes=[2, 5, 8, 11],
         window_size=0,
+        use_rel_pos=False,
     )
     unet3d_cfg = dict(
         num_channels=1,
@@ -125,6 +127,8 @@ def train():
         state_dict = torch.load(ckpt_path, map_location='cpu')
         if 'model' in state_dict:
             state_dict = state_dict['model']
+        elif 'model_state_dict' in state_dict:
+            state_dict = state_dict['model_state_dict']
             
         encoder_dict = {}
         for k, v in state_dict.items():
@@ -133,10 +137,36 @@ def train():
                 encoder_dict[new_k] = v
         
         if len(encoder_dict) > 0:
+            # Handle relative position embedding size mismatch
+            for k in list(encoder_dict.keys()):
+                if 'rel_pos' in k:
+                    v = encoder_dict[k]
+                    # Check if shape mismatch exists (e.g. [27, 64] vs [15, 64])
+                    # Current model expects [15, 64] for window_size=0 (global attention) or specific window size
+                    # But checkpoint has [27, 64] which corresponds to window_size=14 (2*14-1=27)
+                    # We need to interpolate if sizes don't match
+                    
+                    # Get the corresponding parameter in the model to check expected shape
+                    model_param = model.sam_encoder.state_dict().get(k)
+                    if model_param is not None and model_param.shape != v.shape:
+                        print(f"Resizing {k}: {v.shape} -> {model_param.shape}")
+                        # v is [2*Wh-1, head_dim] -> permute to [1, head_dim, 2*Wh-1] for interpolation
+                        v = v.permute(1, 0).unsqueeze(0)
+                        v = F.interpolate(v, size=model_param.shape[0], mode='linear', align_corners=False)
+                        v = v.squeeze(0).permute(1, 0)
+                        encoder_dict[k] = v
+
             msg = model.sam_encoder.load_state_dict(encoder_dict, strict=False)
             print(f"SAM Encoder loaded: {msg}")
         else:
             print("No image_encoder keys found in checkpoint!")
+            print("Available keys in checkpoint (first 10):")
+            print(list(state_dict.keys())[:10])
+            
+            # Try loading without prefix if it matches image encoder structure
+            print("Attempting to load matching keys directly...")
+            msg = model.sam_encoder.load_state_dict(state_dict, strict=False)
+            print(f"Direct load result: {msg}")
     else:
         print(f"Checkpoint not found at {ckpt_path}")
 
