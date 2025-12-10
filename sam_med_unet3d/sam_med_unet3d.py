@@ -62,7 +62,6 @@ class SAMMedUNet3D(nn.Module):
         x4 = self.unet3d.conv_blk4(x_low3)
         x_low4 = self.unet3d.pool4(x4)
         base = self.unet3d.conv_blk5(x_low4)
-        print('UNet3D base shape:', base.shape)
 
         if vit_proj.shape[2:] != base.shape[2:]:
             vit_proj = F.interpolate(
