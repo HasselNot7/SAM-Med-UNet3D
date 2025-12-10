@@ -46,7 +46,7 @@ class SAMMedUNet3D(nn.Module):
         # x: (B, C, D, H, W)
         vit_feat = self.sam_encoder(x)  # (B, D', H', W', C)
         vit_feat = vit_feat.permute(0, 4, 1, 2, 3).contiguous()
-    
+
         # 动态创建projector，确保输入通道数正确
         if self.projector is None or self.projector.proj[0].in_channels != vit_feat.shape[1]:
             self.projector = Conv3DProjector(
@@ -80,6 +80,7 @@ class SAMMedUNet3D(nn.Module):
         seg = self.unet3d.sigmoid(self.unet3d.one_conv(d_high1))
         return seg
 
+
 if __name__ == "__main__":
     # 简易可用性测试
     sam_vit_cfg = dict(
@@ -98,7 +99,7 @@ if __name__ == "__main__":
     model = SAMMedUNet3D(sam_vit_cfg, unet3d_cfg, projector_out_channels=1024)
     model.eval()
     # 构造一个假输入 (B, C, D, H, W)
-    x = torch.randn(2, 1, 16, 128, 128)
+    x = torch.randn(2, 1, 128, 128, 128)
     with torch.no_grad():
         out = model(x)
     print('Input shape:', x.shape)

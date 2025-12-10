@@ -1500,6 +1500,8 @@ unet3d/checkpoints/unet3d_epfl_epoch_1.pth
 sam_checkpoint/sam_med3d_turbo.pth
 sam_checkpoint/sam_med3d_turbo.pth
 datasets/epfl.zip
+.vscode/settings.json
+datasets/epfl.zip
 unet3d/checkpoints/unet3d_epfl_epoch_10.pth
 unet3d/checkpoints/unet3d_epfl_epoch_20.pth
 unet3d/checkpoints/unet3d_epfl_epoch_30.pth
